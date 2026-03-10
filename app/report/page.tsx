@@ -9,11 +9,6 @@ type AddressRow = {
   label: string
 }
 
-type ProblemRow = {
-  id: string
-  label: string
-}
-
 type AppUser = {
   id: string
   name: string
@@ -33,6 +28,106 @@ type MyReportRow = {
   created_at: string | null
 }
 
+type ReportPhotoRow = {
+  file_url: string | null
+  file_name: string | null
+  file_type: string | null
+}
+
+function ReportPhotos({ reportId }: { reportId: string }) {
+  const [photos, setPhotos] = useState<ReportPhotoRow[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    loadPhotos()
+  }, [reportId])
+
+  async function loadPhotos() {
+    try {
+      setLoading(true)
+
+      const { data, error } = await supabase
+        .from("field_report_media")
+        .select("file_url,file_name,file_type")
+        .eq("report_id", reportId)
+        .order("created_at", { ascending: true })
+
+      if (error) {
+        console.error("Photo load error:", error)
+        return
+      }
+
+      setPhotos((data as ReportPhotoRow[]) || [])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div
+        style={{
+          marginTop: 12,
+          color: "#6b7280",
+          fontSize: 15,
+          fontWeight: 700,
+        }}
+      >
+        Loading photos...
+      </div>
+    )
+  }
+
+  if (!photos.length) return null
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div
+        style={{
+          fontSize: 15,
+          fontWeight: 800,
+          color: "#4b5563",
+          marginBottom: 10,
+        }}
+      >
+        Photos
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          flexWrap: "wrap",
+        }}
+      >
+        {photos.map((photo, index) => (
+          <a
+            key={`${photo.file_url || "photo"}-${index}`}
+            href={photo.file_url || "#"}
+            target="_blank"
+            rel="noreferrer"
+            style={{ textDecoration: "none" }}
+          >
+            <img
+              src={photo.file_url || ""}
+              alt={photo.file_name || `Report photo ${index + 1}`}
+              style={{
+                width: 140,
+                height: 140,
+                objectFit: "cover",
+                borderRadius: 12,
+                border: "2px solid #d9e5f4",
+                background: "#f3f4f6",
+                display: "block",
+              }}
+            />
+          </a>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function ReportPage() {
   const router = useRouter()
 
@@ -40,7 +135,6 @@ export default function ReportPage() {
   const [checkingAuth, setCheckingAuth] = useState(true)
 
   const [addresses, setAddresses] = useState<AddressRow[]>([])
-  const [problems, setProblems] = useState<ProblemRow[]>([])
   const [addressInput, setAddressInput] = useState("")
   const [selectedAddress, setSelectedAddress] = useState("")
   const [showSuggestions, setShowSuggestions] = useState(false)
@@ -117,13 +211,7 @@ export default function ReportPage() {
       .select("id,label")
       .order("label", { ascending: true })
 
-    const { data: probs } = await supabase
-      .from("problem_types")
-      .select("id,label")
-      .order("label", { ascending: true })
-
     setAddresses(addr || [])
-    setProblems(probs || [])
   }
 
   async function loadMyReports(userName?: string) {
@@ -228,8 +316,8 @@ export default function ReportPage() {
       return
     }
 
-    if (!problem) {
-      alert("Select problem")
+    if (!problem.trim()) {
+      alert("Type the problem")
       return
     }
 
@@ -241,7 +329,7 @@ export default function ReportPage() {
         .insert([
           {
             address: finalAddress,
-            problem,
+            problem: problem.trim(),
             priority,
             notes,
             submitted_by: user.name,
@@ -267,7 +355,8 @@ export default function ReportPage() {
           .upload(path, photo)
 
         if (uploadError) {
-          console.error(uploadError)
+          console.error("UPLOAD ERROR:", uploadError)
+          alert("Photo upload failed: " + (uploadError.message || "unknown error"))
           continue
         }
 
@@ -275,14 +364,25 @@ export default function ReportPage() {
           .from("field-report-media")
           .getPublicUrl(path)
 
-        await supabase.from("field_report_media").insert([
-          {
-            report_id: reportId,
-            file_url: urlData.publicUrl,
-            file_name: photo.name,
-            file_type: photo.type,
-          },
-        ])
+        const { error: mediaInsertError } = await supabase
+          .from("field_report_media")
+          .insert([
+            {
+              report_id: reportId,
+              file_url: urlData.publicUrl,
+              file_name: photo.name,
+              file_type: photo.type,
+            },
+          ])
+
+        if (mediaInsertError) {
+          console.error("MEDIA ROW INSERT ERROR:", mediaInsertError)
+          alert(
+            "Photo uploaded but media record save failed: " +
+              (mediaInsertError.message || "unknown error")
+          )
+          continue
+        }
       }
 
       alert("Report submitted")
@@ -298,6 +398,9 @@ export default function ReportPage() {
       loadData()
       setShowMyReports(true)
       loadMyReports(user.name)
+    } catch (err: any) {
+      console.error("SUBMIT CRASH:", err)
+      alert("Submit crashed: " + (err?.message || "unknown error"))
     } finally {
       setSaving(false)
     }
@@ -665,6 +768,8 @@ export default function ReportPage() {
                     >
                       {r.notes && r.notes.trim() ? r.notes : "No notes"}
                     </div>
+
+                    <ReportPhotos reportId={r.id} />
                   </div>
                 )
               })
@@ -791,9 +896,10 @@ export default function ReportPage() {
           Problem
         </label>
 
-        <select
+        <input
           value={problem}
           onChange={(e) => setProblem(e.target.value)}
+          placeholder="Type the problem here..."
           style={{
             width: "100%",
             padding: 16,
@@ -805,14 +911,7 @@ export default function ReportPage() {
             color: "#111827",
             boxSizing: "border-box",
           }}
-        >
-          <option value="">Select Problem</option>
-          {problems.map((p) => (
-            <option key={p.id} value={p.label}>
-              {p.label}
-            </option>
-          ))}
-        </select>
+        />
 
         <label
           style={{
