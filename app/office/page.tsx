@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { supabase } from "../../lib/supabaseClient"
 
@@ -41,11 +41,30 @@ type ReportWithMedia = FieldReportRow & {
   estimated_cost: number
 }
 
+type AssignmentRow = {
+  id: string
+  address: string | null
+  tech_name: string | null
+  service_date: string | null
+  job: string | null
+  notes: string | null
+  status: string | null
+  photo_url: string | null
+  created_at: string | null
+}
+
 function formatDate(value: string | null) {
   if (!value) return "No date"
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return value
   return d.toLocaleString()
+}
+
+function formatDateOnly(value: string | null) {
+  if (!value) return "No date"
+  const d = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleDateString()
 }
 
 function formatMoney(value: number) {
@@ -111,6 +130,44 @@ function getStatusStyle(status: string | null) {
   }
 }
 
+function getAssignmentStatusStyle(status: string | null) {
+  const s = (status || "scheduled").trim().toLowerCase()
+
+  if (s === "complete") {
+    return {
+      label: "Complete",
+      bg: "#dcfce7",
+      border: "#22c55e",
+      text: "#166534",
+    }
+  }
+
+  if (s === "in_progress") {
+    return {
+      label: "In Progress",
+      bg: "#dbeafe",
+      border: "#3b82f6",
+      text: "#1d4ed8",
+    }
+  }
+
+  if (s === "skipped") {
+    return {
+      label: "Skipped",
+      bg: "#f3f4f6",
+      border: "#6b7280",
+      text: "#374151",
+    }
+  }
+
+  return {
+    label: "Scheduled",
+    bg: "#fef3c7",
+    border: "#f59e0b",
+    text: "#92400e",
+  }
+}
+
 function AddUserPanel({ refresh }: { refresh: () => void }) {
   const [name, setName] = useState("")
   const [pin, setPin] = useState("")
@@ -139,7 +196,6 @@ function AddUserPanel({ refresh }: { refresh: () => void }) {
       }
 
       alert("User added")
-
       setName("")
       setPin("")
       setRole("tech")
@@ -181,47 +237,20 @@ function AddUserPanel({ refresh }: { refresh: () => void }) {
           placeholder="Name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          style={{
-            width: "100%",
-            padding: 18,
-            borderRadius: 16,
-            border: "2px solid #9bb4df",
-            fontSize: 20,
-            color: "#111827",
-            background: "#f8fbff",
-            boxSizing: "border-box",
-          }}
+          style={inputStyle}
         />
 
         <input
           placeholder="PIN"
           value={pin}
           onChange={(e) => setPin(e.target.value)}
-          style={{
-            width: "100%",
-            padding: 18,
-            borderRadius: 16,
-            border: "2px solid #9bb4df",
-            fontSize: 20,
-            color: "#111827",
-            background: "#f8fbff",
-            boxSizing: "border-box",
-          }}
+          style={inputStyle}
         />
 
         <select
           value={role}
           onChange={(e) => setRole(e.target.value)}
-          style={{
-            width: "100%",
-            padding: 18,
-            borderRadius: 16,
-            border: "2px solid #9bb4df",
-            fontSize: 20,
-            color: "#111827",
-            background: "#f8fbff",
-            boxSizing: "border-box",
-          }}
+          style={inputStyle}
         >
           <option value="tech">Tech</option>
           <option value="office">Office</option>
@@ -230,25 +259,37 @@ function AddUserPanel({ refresh }: { refresh: () => void }) {
         <button
           onClick={addUser}
           disabled={saving}
-          style={{
-            width: "100%",
-            padding: 18,
-            borderRadius: 16,
-            border: "none",
-            fontSize: 20,
-            fontWeight: 800,
-            background: "#2563eb",
-            color: "#ffffff",
-            cursor: saving ? "not-allowed" : "pointer",
-            opacity: saving ? 0.8 : 1,
-            boxShadow: "0 6px 16px rgba(37,99,235,0.25)",
-          }}
+          style={primaryButtonStyle}
         >
           {saving ? "Adding..." : "Add User"}
         </button>
       </div>
     </div>
   )
+}
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: 18,
+  borderRadius: 16,
+  border: "2px solid #9bb4df",
+  fontSize: 20,
+  color: "#111827",
+  background: "#f8fbff",
+  boxSizing: "border-box",
+}
+
+const primaryButtonStyle: React.CSSProperties = {
+  width: "100%",
+  padding: 18,
+  borderRadius: 16,
+  border: "none",
+  fontSize: 20,
+  fontWeight: 800,
+  background: "#2563eb",
+  color: "#ffffff",
+  cursor: "pointer",
+  boxShadow: "0 6px 16px rgba(37,99,235,0.25)",
 }
 
 export default function OfficeReportsPage() {
@@ -258,8 +299,18 @@ export default function OfficeReportsPage() {
   const [checkingAuth, setCheckingAuth] = useState(true)
 
   const [reports, setReports] = useState<ReportWithMedia[]>([])
+  const [assignments, setAssignments] = useState<AssignmentRow[]>([])
+  const [techUsers, setTechUsers] = useState<AppUser[]>([])
+
   const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(false)
+
+  const [address, setAddress] = useState("")
+  const [techName, setTechName] = useState("")
+  const [serviceDate, setServiceDate] = useState("")
+  const [job, setJob] = useState("")
+  const [assignmentNotes, setAssignmentNotes] = useState("")
+  const [savingAssignment, setSavingAssignment] = useState(false)
 
   useEffect(() => {
     const raw = localStorage.getItem("user")
@@ -299,14 +350,8 @@ export default function OfficeReportsPage() {
         .channel("office-field-reports-live")
         .on(
           "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "field_reports",
-          },
-          () => {
-            loadOfficeData()
-          }
+          { event: "*", schema: "public", table: "field_reports" },
+          () => loadOfficeData()
         )
         .subscribe()
 
@@ -314,14 +359,8 @@ export default function OfficeReportsPage() {
         .channel("office-field-report-media-live")
         .on(
           "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "field_report_media",
-          },
-          () => {
-            loadOfficeData()
-          }
+          { event: "*", schema: "public", table: "field_report_media" },
+          () => loadOfficeData()
         )
         .subscribe()
 
@@ -329,14 +368,26 @@ export default function OfficeReportsPage() {
         .channel("office-problem-types-live")
         .on(
           "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "problem_types",
-          },
-          () => {
-            loadOfficeData()
-          }
+          { event: "*", schema: "public", table: "problem_types" },
+          () => loadOfficeData()
+        )
+        .subscribe()
+
+      const assignmentsChannel = supabase
+        .channel("office-assignments-live")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "assignments" },
+          () => loadOfficeData()
+        )
+        .subscribe()
+
+      const usersChannel = supabase
+        .channel("office-app-users-live")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "app_users" },
+          () => loadOfficeData()
         )
         .subscribe()
 
@@ -344,6 +395,8 @@ export default function OfficeReportsPage() {
         supabase.removeChannel(reportsChannel)
         supabase.removeChannel(mediaChannel)
         supabase.removeChannel(problemTypesChannel)
+        supabase.removeChannel(assignmentsChannel)
+        supabase.removeChannel(usersChannel)
       }
     } catch {
       localStorage.removeItem("user")
@@ -354,19 +407,25 @@ export default function OfficeReportsPage() {
   async function loadOfficeData() {
     setLoading(true)
 
-    const { data: reportsData, error: reportsError } = await supabase
-      .from("field_reports")
-      .select("*")
-      .order("created_at", { ascending: false })
+    const [
+      reportsRes,
+      mediaRes,
+      problemTypesRes,
+      assignmentsRes,
+      usersRes,
+    ] = await Promise.all([
+      supabase.from("field_reports").select("*").order("created_at", { ascending: false }),
+      supabase.from("field_report_media").select("*").order("id", { ascending: false }),
+      supabase.from("problem_types").select("label, estimated_cost"),
+      supabase.from("assignments").select("*").order("service_date", { ascending: true }).order("created_at", { ascending: false }),
+      supabase.from("app_users").select("*").eq("active", true).order("name", { ascending: true }),
+    ])
 
-    const { data: mediaData, error: mediaError } = await supabase
-      .from("field_report_media")
-      .select("*")
-      .order("id", { ascending: false })
-
-    const { data: problemTypeData, error: problemTypeError } = await supabase
-      .from("problem_types")
-      .select("label, estimated_cost")
+    const reportsError = reportsRes.error
+    const mediaError = mediaRes.error
+    const problemTypeError = problemTypesRes.error
+    const assignmentsError = assignmentsRes.error
+    const usersError = usersRes.error
 
     if (reportsError) {
       console.error("Reports load error:", reportsError)
@@ -389,32 +448,133 @@ export default function OfficeReportsPage() {
       return
     }
 
+    if (assignmentsError) {
+      console.error("Assignments load error:", assignmentsError)
+      alert("Could not load assignments")
+      setLoading(false)
+      return
+    }
+
+    if (usersError) {
+      console.error("Users load error:", usersError)
+      alert("Could not load users")
+      setLoading(false)
+      return
+    }
+
+    const reportsData = reportsRes.data || []
+    const mediaData = mediaRes.data || []
+    const problemTypeData = problemTypesRes.data || []
+    const assignmentsData = assignmentsRes.data || []
+    const usersData = usersRes.data || []
+
     const costMap = new Map<string, number>()
 
-    ;((problemTypeData as ProblemTypeRow[]) || []).forEach((row) => {
+    ;(problemTypeData as ProblemTypeRow[]).forEach((row) => {
       costMap.set(
         (row.label || "").trim().toLowerCase(),
         Number(row.estimated_cost || 0)
       )
     })
 
-    const combined: ReportWithMedia[] = (
-      (reportsData as FieldReportRow[]) || []
-    ).map((report) => {
+    const combined: ReportWithMedia[] = (reportsData as FieldReportRow[]).map((report) => {
       const key = (report.problem || "").trim().toLowerCase()
       const estimatedCost = costMap.get(key) || 0
 
       return {
         ...report,
-        media: ((mediaData as FieldReportMediaRow[]) || []).filter(
-          (m) => m.report_id === report.id
-        ),
+        media: (mediaData as FieldReportMediaRow[]).filter((m) => m.report_id === report.id),
         estimated_cost: estimatedCost,
       }
     })
 
     setReports(combined)
+    setAssignments(assignmentsData as AssignmentRow[])
+    setTechUsers(
+      (usersData as AppUser[]).filter((u) => u.role === "tech" && u.active)
+    )
+
     setLoading(false)
+  }
+
+  async function addAssignment() {
+    if (!address.trim()) {
+      alert("Enter address")
+      return
+    }
+
+    if (!techName.trim()) {
+      alert("Pick a tech")
+      return
+    }
+
+    if (!serviceDate) {
+      alert("Pick a date")
+      return
+    }
+
+    if (!job.trim()) {
+      alert("Enter job")
+      return
+    }
+
+    try {
+      setSavingAssignment(true)
+
+      const { error } = await supabase.from("assignments").insert({
+        address: address.trim(),
+        tech_name: techName.trim(),
+        service_date: serviceDate,
+        job: job.trim(),
+        notes: assignmentNotes.trim(),
+        status: "scheduled",
+      })
+
+      if (error) {
+        alert(error.message)
+        return
+      }
+
+      setAddress("")
+      setTechName("")
+      setServiceDate("")
+      setJob("")
+      setAssignmentNotes("")
+      await loadOfficeData()
+      alert("Assignment added")
+    } finally {
+      setSavingAssignment(false)
+    }
+  }
+
+  async function deleteAssignment(id: string) {
+    const ok = window.confirm("Delete this assignment?")
+    if (!ok) return
+
+    const { error } = await supabase.from("assignments").delete().eq("id", id)
+
+    if (error) {
+      alert("Could not delete assignment")
+      console.error(error)
+      return
+    }
+
+    loadOfficeData()
+  }
+
+  async function updateAssignmentStatus(id: string, status: string) {
+    const { error } = await supabase
+      .from("assignments")
+      .update({ status })
+      .eq("id", id)
+
+    if (error) {
+      alert("Could not update assignment status")
+      console.error(error)
+      return
+    }
+
+    loadOfficeData()
   }
 
   async function updateStatus(reportId: string, status: string) {
@@ -437,11 +597,19 @@ export default function OfficeReportsPage() {
     router.replace("/login")
   }
 
-  const filteredReports = reports.filter((r) => {
-    const text =
-      `${r.address || ""} ${r.problem || ""} ${r.priority || ""} ${r.notes || ""} ${r.submitted_by || ""} ${r.status || ""}`
-    return text.toLowerCase().includes(search.toLowerCase())
-  })
+  const filteredAssignments = useMemo(() => {
+    return assignments.filter((a) => {
+      const text = `${a.address || ""} ${a.tech_name || ""} ${a.service_date || ""} ${a.job || ""} ${a.notes || ""} ${a.status || ""}`
+      return text.toLowerCase().includes(search.toLowerCase())
+    })
+  }, [assignments, search])
+
+  const filteredReports = useMemo(() => {
+    return reports.filter((r) => {
+      const text = `${r.address || ""} ${r.problem || ""} ${r.priority || ""} ${r.notes || ""} ${r.submitted_by || ""} ${r.status || ""}`
+      return text.toLowerCase().includes(search.toLowerCase())
+    })
+  }, [reports, search])
 
   if (checkingAuth) {
     return (
@@ -525,7 +693,7 @@ export default function OfficeReportsPage() {
                   fontWeight: 500,
                 }}
               >
-                Live field reports from tech submissions
+                Assign jobs, manage reports, and track tech work
               </div>
 
               <div
@@ -583,7 +751,7 @@ export default function OfficeReportsPage() {
           </div>
 
           <input
-            placeholder="Search address, problem, notes, priority, tech, status..."
+            placeholder="Search assignments or reports..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{
@@ -601,7 +769,242 @@ export default function OfficeReportsPage() {
           />
         </div>
 
+        <div
+          style={{
+            background: "#ffffff",
+            borderRadius: 22,
+            padding: 28,
+            boxShadow: "0 10px 24px rgba(0,0,0,0.08)",
+            marginBottom: 24,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 30,
+              fontWeight: 800,
+              color: "#2a37d6",
+              marginBottom: 18,
+            }}
+          >
+            Add Assignment
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 14,
+              marginBottom: 14,
+            }}
+          >
+            <input
+              placeholder="Address"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              style={inputStyle}
+            />
+
+            <select
+              value={techName}
+              onChange={(e) => setTechName(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="">Pick Tech</option>
+              {techUsers.map((tech) => (
+                <option key={tech.id} value={tech.name}>
+                  {tech.name}
+                </option>
+              ))}
+            </select>
+
+            <input
+              type="date"
+              value={serviceDate}
+              onChange={(e) => setServiceDate(e.target.value)}
+              style={inputStyle}
+            />
+
+            <input
+              placeholder="Job"
+              value={job}
+              onChange={(e) => setJob(e.target.value)}
+              style={inputStyle}
+            />
+          </div>
+
+          <textarea
+            placeholder="Notes (optional)"
+            value={assignmentNotes}
+            onChange={(e) => setAssignmentNotes(e.target.value)}
+            style={{
+              ...inputStyle,
+              minHeight: 110,
+              resize: "vertical",
+              marginBottom: 14,
+            }}
+          />
+
+          <button
+            onClick={addAssignment}
+            disabled={savingAssignment}
+            style={{
+              ...primaryButtonStyle,
+              maxWidth: 280,
+              opacity: savingAssignment ? 0.8 : 1,
+              cursor: savingAssignment ? "not-allowed" : "pointer",
+            }}
+          >
+            {savingAssignment ? "Adding..." : "Add Assignment"}
+          </button>
+        </div>
+
         <AddUserPanel refresh={loadOfficeData} />
+
+        <div
+          style={{
+            background: "#ffffff",
+            borderRadius: 22,
+            padding: 28,
+            boxShadow: "0 10px 24px rgba(0,0,0,0.08)",
+            marginBottom: 24,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 30,
+              fontWeight: 800,
+              color: "#2a37d6",
+              marginBottom: 18,
+            }}
+          >
+            Assignments
+          </div>
+
+          {filteredAssignments.length === 0 ? (
+            <div
+              style={{
+                fontSize: 22,
+                color: "#4b5563",
+                fontWeight: 600,
+              }}
+            >
+              No assignments found
+            </div>
+          ) : (
+            filteredAssignments.map((a) => {
+              const statusStyle = getAssignmentStatusStyle(a.status)
+
+              return (
+                <div
+                  key={a.id}
+                  style={{
+                    border: "1px solid #d9e5f4",
+                    borderRadius: 18,
+                    padding: 20,
+                    marginBottom: 16,
+                    background: "#f9fbfe",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 18,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 280 }}>
+                      <div
+                        style={{
+                          fontSize: 28,
+                          color: "#2a37d6",
+                          fontWeight: 800,
+                          marginBottom: 10,
+                        }}
+                      >
+                        {a.address || "No address"}
+                      </div>
+
+                      <div style={{ fontSize: 18, color: "#111827", fontWeight: 700, marginBottom: 8 }}>
+                        Tech: <span style={{ fontWeight: 500 }}>{a.tech_name || "Not set"}</span>
+                      </div>
+
+                      <div style={{ fontSize: 18, color: "#111827", fontWeight: 700, marginBottom: 8 }}>
+                        Date: <span style={{ fontWeight: 500 }}>{formatDateOnly(a.service_date)}</span>
+                      </div>
+
+                      <div style={{ fontSize: 18, color: "#111827", fontWeight: 700, marginBottom: 8 }}>
+                        Job: <span style={{ fontWeight: 500 }}>{a.job || "Not set"}</span>
+                      </div>
+
+                      <div style={{ fontSize: 18, color: "#111827", fontWeight: 700, marginBottom: 8 }}>
+                        Notes: <span style={{ fontWeight: 500 }}>{a.notes?.trim() ? a.notes : "None"}</span>
+                      </div>
+
+                      <div
+                        style={{
+                          display: "inline-block",
+                          background: statusStyle.bg,
+                          border: `2px solid ${statusStyle.border}`,
+                          color: statusStyle.text,
+                          borderRadius: 999,
+                          padding: "8px 14px",
+                          fontSize: 16,
+                          fontWeight: 800,
+                          marginTop: 6,
+                        }}
+                      >
+                        {statusStyle.label}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        minWidth: 260,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 12,
+                      }}
+                    >
+                      <select
+                        value={a.status || "scheduled"}
+                        onChange={(e) => updateAssignmentStatus(a.id, e.target.value)}
+                        style={inputStyle}
+                      >
+                        <option value="scheduled">Scheduled</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="complete">Complete</option>
+                        <option value="skipped">Skipped</option>
+                      </select>
+
+                      <button
+                        onClick={() => deleteAssignment(a.id)}
+                        style={{
+                          ...primaryButtonStyle,
+                          background: "#dc2626",
+                          boxShadow: "0 6px 16px rgba(220,38,38,0.25)",
+                        }}
+                      >
+                        Delete Assignment
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+
+        <div
+          style={{
+            fontSize: 34,
+            fontWeight: 800,
+            color: "#2a37d6",
+            marginBottom: 18,
+          }}
+        >
+          Field Reports
+        </div>
 
         {filteredReports.length === 0 ? (
           <div

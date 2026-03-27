@@ -34,6 +34,18 @@ type ReportPhotoRow = {
   file_type: string | null
 }
 
+type AssignmentRow = {
+  id: string
+  address: string | null
+  tech_name: string | null
+  service_date: string | null
+  job: string | null
+  notes: string | null
+  status: string | null
+  photo_url: string | null
+  created_at: string | null
+}
+
 function ReportPhotos({ reportId }: { reportId: string }) {
   const [photos, setPhotos] = useState<ReportPhotoRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -128,6 +140,28 @@ function ReportPhotos({ reportId }: { reportId: string }) {
   )
 }
 
+function getTodayLocalDate() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, "0")
+  const d = String(now.getDate()).padStart(2, "0")
+  return `${y}-${m}-${d}`
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "No date"
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleString()
+}
+
+function formatDateOnly(value: string | null) {
+  if (!value) return "No date"
+  const d = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleDateString()
+}
+
 export default function ReportPage() {
   const router = useRouter()
 
@@ -147,6 +181,11 @@ export default function ReportPage() {
   const [showMyReports, setShowMyReports] = useState(false)
   const [myReports, setMyReports] = useState<MyReportRow[]>([])
   const [loadingMyReports, setLoadingMyReports] = useState(false)
+
+  const [routeDate, setRouteDate] = useState(getTodayLocalDate())
+  const [routeAssignments, setRouteAssignments] = useState<AssignmentRow[]>([])
+  const [loadingRoute, setLoadingRoute] = useState(false)
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState("")
 
   const addressBoxRef = useRef<HTMLDivElement | null>(null)
 
@@ -183,6 +222,20 @@ export default function ReportPage() {
       setUser(parsed)
       setCheckingAuth(false)
       loadData()
+      loadRouteAssignments(parsed.name, getTodayLocalDate())
+
+      const assignmentsChannel = supabase
+        .channel("tech-assignments-live")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "assignments" },
+          () => loadRouteAssignments(parsed.name, routeDate || getTodayLocalDate())
+        )
+        .subscribe()
+
+      return () => {
+        supabase.removeChannel(assignmentsChannel)
+      }
     } catch {
       localStorage.removeItem("user")
       router.replace("/login")
@@ -212,6 +265,36 @@ export default function ReportPage() {
       .order("label", { ascending: true })
 
     setAddresses(addr || [])
+  }
+
+  async function loadRouteAssignments(techName: string, dateValue: string) {
+    const cleanTech = (techName || "").trim()
+    const cleanDate = (dateValue || "").trim()
+
+    if (!cleanTech || !cleanDate) {
+      setRouteAssignments([])
+      return
+    }
+
+    try {
+      setLoadingRoute(true)
+
+      const { data, error } = await supabase
+        .from("assignments")
+        .select("*")
+        .eq("tech_name", cleanTech)
+        .eq("service_date", cleanDate)
+        .order("created_at", { ascending: true })
+
+      if (error) {
+        console.error("Route load error:", error)
+        return
+      }
+
+      setRouteAssignments((data as AssignmentRow[]) || [])
+    } finally {
+      setLoadingRoute(false)
+    }
   }
 
   async function loadMyReports(userName?: string) {
@@ -269,6 +352,26 @@ export default function ReportPage() {
     setAddressInput(label)
     setSelectedAddress(label)
     setShowSuggestions(false)
+  }
+
+  function chooseAssignment(assignmentId: string) {
+    setSelectedAssignmentId(assignmentId)
+
+    const picked = routeAssignments.find((a) => a.id === assignmentId)
+    if (!picked) return
+
+    const pickedAddress = picked.address || ""
+    setAddressInput(pickedAddress)
+    setSelectedAddress(pickedAddress)
+    setShowSuggestions(false)
+
+    if (!problem.trim() && picked.job?.trim()) {
+      setProblem(picked.job.trim())
+    }
+
+    if (!notes.trim() && picked.notes?.trim()) {
+      setNotes(picked.notes.trim())
+    }
   }
 
   async function getFinalAddress() {
@@ -385,6 +488,17 @@ export default function ReportPage() {
         }
       }
 
+      if (selectedAssignmentId) {
+        const { error: assignmentUpdateError } = await supabase
+          .from("assignments")
+          .update({ status: "complete" })
+          .eq("id", selectedAssignmentId)
+
+        if (assignmentUpdateError) {
+          console.error("ASSIGNMENT STATUS UPDATE ERROR:", assignmentUpdateError)
+        }
+      }
+
       alert("Report submitted")
 
       setAddressInput("")
@@ -394,10 +508,12 @@ export default function ReportPage() {
       setPriority("normal")
       setNotes("")
       setPhotos([])
+      setSelectedAssignmentId("")
 
-      loadData()
+      await loadData()
+      await loadRouteAssignments(user.name, routeDate)
       setShowMyReports(true)
-      loadMyReports(user.name)
+      await loadMyReports(user.name)
     } catch (err: any) {
       console.error("SUBMIT CRASH:", err)
       alert("Submit crashed: " + (err?.message || "unknown error"))
@@ -493,13 +609,6 @@ export default function ReportPage() {
       border: "#f59e0b",
       text: "#92400e",
     }
-  }
-
-  function formatDate(value: string | null) {
-    if (!value) return "No date"
-    const d = new Date(value)
-    if (Number.isNaN(d.getTime())) return value
-    return d.toLocaleString()
   }
 
   if (checkingAuth) {
@@ -621,6 +730,138 @@ export default function ReportPage() {
           }}
         >
           Logged in as: {user?.name} ({user?.role})
+        </div>
+
+        <div
+          style={{
+            marginBottom: 28,
+            background: "#f8fbff",
+            border: "1px solid #d9e5f4",
+            borderRadius: 18,
+            padding: 20,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 24,
+              fontWeight: 800,
+              color: "#2a37d6",
+              marginBottom: 16,
+            }}
+          >
+            My Route
+          </div>
+
+          <label
+            style={{
+              display: "block",
+              fontSize: 17,
+              fontWeight: 700,
+              marginBottom: 8,
+              color: "#111827",
+            }}
+          >
+            Route Date
+          </label>
+
+          <input
+            type="date"
+            value={routeDate}
+            onChange={async (e) => {
+              const nextDate = e.target.value
+              setRouteDate(nextDate)
+              setSelectedAssignmentId("")
+              await loadRouteAssignments(user?.name || "", nextDate)
+            }}
+            style={{
+              width: "100%",
+              padding: 16,
+              borderRadius: 12,
+              border: "3px solid #2a37d6",
+              fontSize: 18,
+              background: "#ffffff",
+              color: "#111827",
+              boxSizing: "border-box",
+              marginBottom: 16,
+            }}
+          />
+
+          <label
+            style={{
+              display: "block",
+              fontSize: 17,
+              fontWeight: 700,
+              marginBottom: 8,
+              color: "#111827",
+            }}
+          >
+            Route Stop
+          </label>
+
+          <select
+            value={selectedAssignmentId}
+            onChange={(e) => chooseAssignment(e.target.value)}
+            style={{
+              width: "100%",
+              padding: 16,
+              borderRadius: 12,
+              border: "3px solid #2a37d6",
+              fontSize: 18,
+              background: "#ffffff",
+              color: "#111827",
+              boxSizing: "border-box",
+            }}
+          >
+            <option value="">Pick an assigned address</option>
+            {routeAssignments.map((a) => (
+              <option key={a.id} value={a.id}>
+                {(a.address || "No address")} - {(a.job || "No job")}
+              </option>
+            ))}
+          </select>
+
+          <div
+            style={{
+              marginTop: 12,
+              color: "#4b5563",
+              fontSize: 15,
+              fontWeight: 700,
+            }}
+          >
+            {loadingRoute
+              ? "Loading route..."
+              : routeAssignments.length === 0
+              ? `No route stops for ${formatDateOnly(routeDate)}`
+              : `${routeAssignments.length} stop(s) for ${formatDateOnly(routeDate)}`}
+          </div>
+
+          {selectedAssignmentId && (
+            <div
+              style={{
+                marginTop: 14,
+                padding: 14,
+                borderRadius: 12,
+                border: "1px solid #d9e5f4",
+                background: "#ffffff",
+              }}
+            >
+              {routeAssignments
+                .filter((a) => a.id === selectedAssignmentId)
+                .map((a) => (
+                  <div key={a.id}>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: "#111827", marginBottom: 6 }}>
+                      Address: <span style={{ fontWeight: 600 }}>{a.address || "No address"}</span>
+                    </div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: "#111827", marginBottom: 6 }}>
+                      Job: <span style={{ fontWeight: 600 }}>{a.job || "No job"}</span>
+                    </div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: "#111827" }}>
+                      Office Notes: <span style={{ fontWeight: 600 }}>{a.notes?.trim() ? a.notes : "None"}</span>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
 
         {showMyReports && (
@@ -802,6 +1043,7 @@ export default function ReportPage() {
               setAddressInput(e.target.value)
               setSelectedAddress("")
               setShowSuggestions(true)
+              setSelectedAssignmentId("")
             }}
             onFocus={() => setShowSuggestions(true)}
             placeholder="Start typing address..."
@@ -880,8 +1122,8 @@ export default function ReportPage() {
           }}
         >
           {selectedAddress
-            ? `Using saved address: ${selectedAddress}`
-            : "Type to find a saved address or enter a brand-new one"}
+            ? `Using address: ${selectedAddress}`
+            : "Type to find a saved address or pick one from your route"}
         </div>
 
         <label
