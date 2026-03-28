@@ -14,26 +14,41 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Field Report",
-  description: "Field Report app for techs and office",
-  manifest: "/manifest.json",
-  themeColor: "#0f172a",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "default",
-    title: "Field Report",
-  },
+  description: "Aardvark Field Report App",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+      <head>
+        {/* 🔔 OneSignal SDK */}
+        <script
+          src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js"
+          async
+        ></script>
+
+        {/* 🔥 INIT ONESIGNAL */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              window.OneSignalDeferred = window.OneSignalDeferred || [];
+              OneSignalDeferred.push(async function(OneSignal) {
+                await OneSignal.init({
+                  appId: "f7a469db-4797-448f-b2af-5153c61d6410",
+                });
+
+                OneSignal.Slidedown.promptPush();
+              });
+            `,
+          }}
+        />
+      </head>
+
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         {children}
       </body>
     </html>
